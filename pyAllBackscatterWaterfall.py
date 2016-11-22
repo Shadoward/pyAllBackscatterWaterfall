@@ -12,7 +12,6 @@ from matplotlib import cm
 import numpy as np
 from PIL import Image,ImageDraw,ImageFont, ImageOps, ImageChops
 import pyall
-import shadedRelief as sr
 import time
 import os.path
 import warnings
@@ -23,7 +22,6 @@ warnings.filterwarnings('ignore')
 def main():
     parser = argparse.ArgumentParser(description='Read Kongsberg ALL file and create a hill shaded color waterfall image.')
     parser.add_argument('-i', dest='inputFile', action='store', help='-i <ALLfilename> : input ALL filename to image. It can also be a wildcard, e.g. *.all')
-    parser.add_argument('-s', dest='shadeScale', default = 0, action='store', help='-s <value> : Override Automatic Shade scale factor with this value. A smaller number (0.1) provides less shade that a larger number (10) Range is anything.  [Default: 0]')
     parser.add_argument('-z', dest='zoom', default = 0, action='store', help='-z <value> : Zoom scale factor. A larger number makes a larger image, and a smaller number (0.5) provides a smaller image, e.g -z 2 makes an image twice the native resolution. [Default: 0]')
     parser.add_argument('-a', action='store_true', default=False, dest='annotate', help='-a : Annotate the image with timestamps.  [Default: True]')
     parser.add_argument('-r', action='store_true', default=False, dest='rotate', help='-r : Rotate the resulting waterfall so the image reads from left to right instead of bottom to top.  [Default is bottom to top]')
@@ -34,7 +32,7 @@ def main():
         sys.exit(1)
     
     #load a nice color palette
-    colors = loadPalette(os.path.dirname(os.path.realpath(__file__)) + '/jeca.pal')
+    # colors = loadPalette(os.path.dirname(os.path.realpath(__file__)) + '/jeca.pal')
     args = parser.parse_args()
 
     print ("processing with settings: ", args)
@@ -45,10 +43,7 @@ def main():
 
         xResolution, yResolution, beamCount, leftExtent, rightExtent, distanceTravelled, navigation = computeXYResolution(filename)
         print("xRes %.2f yRes %.2f  leftExtent %.2f, rightExtent %.2f, distanceTravelled %.2f" % (xResolution, yResolution, leftExtent, rightExtent, distanceTravelled)) 
-        shadeScale = float(args.shadeScale)
-        if (shadeScale==0): 
-            shadeScale = 38 * math.pow(abs(leftExtent)+abs(rightExtent), -0.783)
-            # args.shadeScale = 38 * math.pow(abs(leftExtent)+abs(rightExtent), -0.783)
+
         if beamCount == 0:
             print ("No data to process, skipping empty file")
             continue
@@ -60,10 +55,9 @@ def main():
             while (bc < 300):
                 zoom *= 2
                 bc *= zoom 
-        print("Shade %.2f Zoom %.2f beamCount %d swathWidth %.2f" % (shadeScale, zoom, beamCount, abs(leftExtent)+abs(rightExtent))) 
-        createWaterfall(filename, colors, beamCount, shadeScale, zoom, args.annotate, xResolution, yResolution, args.rotate, args.gray, leftExtent, rightExtent, distanceTravelled, navigation)
+        createWaterfall(filename, 'gray', beamCount, zoom, True, args.annotate, xResolution, yResolution, args.rotate, leftExtent, rightExtent, distanceTravelled, navigation)
 
-def createWaterfall(filename, colors, beamCount, shadeScale=1, zoom=1.0, annotate=True, xResolution=1, yResolution=1, rotate=False, gray=False, leftExtent=-100, rightExtent=100, distanceTravelled=0, navigation=[]):
+def createWaterfall(filename, colorScale, beamCount, zoom=1.0, invert=True, annotate=True, xResolution=1, yResolution=1, rotate=False, leftExtent=-100, rightExtent=100, distanceTravelled=0, navigation=[]):
     print ("Processing file: ", filename)
 
     r = pyall.ALLReader(filename)
@@ -71,8 +65,8 @@ def createWaterfall(filename, colors, beamCount, shadeScale=1, zoom=1.0, annotat
     start_time = time.time() # time the process
     recCount = 0
     waterfall = []
-    minDepth = 9999.0
-    maxDepth = -minDepth
+    minBS = 9999.0
+    maxBS = -minBS
     outputResolution = beamCount * zoom
     isoStretchFactor = (yResolution/xResolution) * zoom
     print ("xRes %.2f yRes %.2f isoStretchFactor %.2f outputResolution %.2f" % (xResolution, yResolution, isoStretchFactor, outputResolution))
@@ -82,18 +76,15 @@ def createWaterfall(filename, colors, beamCount, shadeScale=1, zoom=1.0, annotat
             continue
         if (TypeOfDatagram == 'X') or (TypeOfDatagram == 'D'):
             datagram.read()
+            
             if datagram.NBeams == 0:
                 continue
 
-            # if datagram.SerialNumber == 275:                    
-            for d in range(len(datagram.Depth)):
-                datagram.Depth[d] = datagram.Depth[d] + datagram.TransducerDepth
-
             # we need to remember the actual data extents so we can set the color palette mappings to the same limits. 
-            minDepth = min(minDepth, min(datagram.Depth))
-            maxDepth = max(maxDepth, max(datagram.Depth))
+            minBS = min(minBS, min(datagram.Reflectivity))
+            maxBS = max(maxBS, max(datagram.Reflectivity))
 
-            waterfall.insert(0, np.asarray(datagram.Depth))            
+            waterfall.insert(0, np.asarray(datagram.Reflectivity))            
 
             # we need to stretch the data to make it isometric, so lets use numpy interp routing to do that for Us
             # datagram.AcrossTrackDistance.reverse()
@@ -132,29 +123,12 @@ def createWaterfall(filename, colors, beamCount, shadeScale=1, zoom=1.0, annotat
     npGrid = stretchedGrid
     npGrid = np.ma.masked_values(npGrid, 0.0)
     
-    if gray:
-        print ("Hillshading...")
-        #Create hillshade a little brighter and invert so hills look like hills
-        colorMap = None
-        npGrid = npGrid.T * shadeScale * -1.0
-        hs = sr.calcHillshade(npGrid, 1, 45, 30)
-        img = Image.fromarray(hs).convert('RGBA')
-    else:
-        print ("Color mapping...")
-        npGrid = npGrid.T
-        # calculate color height map
-        cmrgb = cm.colors.ListedColormap(colors, name='from_list', N=None)
-        colorMap = cm.ScalarMappable(cmap=cmrgb)
-        colorMap.set_clim(vmin=minDepth, vmax=maxDepth)
-        colorArray = colorMap.to_rgba(npGrid, alpha=None, bytes=True)    
-        colorImage = Image.frombuffer('RGBA', (colorArray.shape[1], colorArray.shape[0]), colorArray, 'raw', 'RGBA', 0,1)
-        #Create hillshade a little darker as we are blending it. we do not need to invert as we are subtracting the shade from the color image
-        npGrid = npGrid * shadeScale 
-        hs = sr.calcHillshade(npGrid, 1, 45, 5)
-        img = Image.fromarray(hs).convert('RGBA')
-
-        # now blend the two images
-        img = ImageChops.subtract(colorImage, img).convert('RGB')
+    if colorScale.lower() == "graylog": 
+        print ("Converting to Image with graylog scale...")
+        img = samplesToGrayImageLogarithmic(npGrid, invert, clip)
+    elif colorScale.lower() == "gray":
+        print ("Converting to Image with gray scale...")
+        img = samplesToGrayImage(npGrid, invert, clip)
 
     if annotate:
         #rotate the image if the user requests this.  It is a little better for viewing in a browser
@@ -162,13 +136,101 @@ def createWaterfall(filename, colors, beamCount, shadeScale=1, zoom=1.0, annotat
         meanDepth = np.average(waterfall)
         waterfallPixelSize = (abs(rightExtent) + abs(rightExtent)) /  img.width
         # print ("Mean Depth %.2f" % meanDepth)
-        imgLegend = createLegend(filename, img.width, (abs(leftExtent)+abs(rightExtent)), distanceTravelled, waterfallPixelSize, minDepth, maxDepth, meanDepth, colorMap)
+        imgLegend = createLegend(filename, img.width, (abs(leftExtent)+abs(rightExtent)), distanceTravelled, waterfallPixelSize, minBS, maxBS, meanDepth, colorMap)
         img = spliceImages(img, imgLegend)
 
     if rotate:
         img = img.rotate(-90, expand=True)
     img.save(os.path.splitext(filename)[0]+'.png')
     print ("Saved to: ", os.path.splitext(filename)[0]+'.png')
+
+###################################
+# zg_LL = lower limit of grey scale
+# zg_UL = upper limit of grey scale
+# zs_LL = lower limit of samples range
+# zs_UL = upper limit of sample range
+def samplesToGrayImage(samples, invert, clip):
+    zg_LL = 5 # min and max grey scales
+    zg_UL = 250
+    zs_LL = 0 
+    zs_UL = 0
+    conv_01_99 = 1
+    
+    #create numpy arrays so we can compute stats
+    channel = np.array(samples)   
+
+    # compute the clips
+    if clip > 0:
+        zs_LL, zs_UL = findMinMaxClipValues(channel, clip)
+    else:
+        zs_LL = channel.min()
+        zs_UL = channel.max()
+    
+    # this scales from the range of image values to the range of output grey levels
+    if (zs_UL - zs_LL) is not 0:
+        conv_01_99 = ( zg_UL - zg_LL ) / ( zs_UL - zs_LL )
+   
+    #we can expect some divide by zero errors, so suppress 
+    np.seterr(divide='ignore')
+    # channel = np.log(samples)
+    channel = np.subtract(channel, zs_LL)
+    channel = np.multiply(channel, conv_01_99)
+    if invert:
+        channel = np.subtract(zg_UL, channel)
+    else:
+        channel = np.add(zg_LL, channel)
+    image = Image.fromarray(channel).convert('L')
+    return image
+
+###################################
+# zg_LL = lower limit of grey scale
+# zg_UL = upper limit of grey scale
+# zs_LL = lower limit of samples range
+# zs_UL = upper limit of sample range
+def samplesToGrayImageLogarithmic(samples, invert, clip):
+    zg_LL = 0 # min and max grey scales
+    zg_UL = 255
+    zs_LL = 0 
+    zs_UL = 0
+    conv_01_99 = 1
+    # channelMin = 0
+    # channelMax = 0
+    #create numpy arrays so we can compute stats
+    channel = np.array(samples)   
+
+    # compute the clips
+    if clip > 0:
+        channelMin, channelMax = findMinMaxClipValues(channel, clip)
+    else:
+        channelMin = channel.min()
+        channelMax = channel.max()
+    
+    if channelMin > 0:
+        zs_LL = math.log(channelMin)
+    else:
+        zs_LL = 0
+    if channelMax > 0:
+        zs_UL = math.log(channelMax)
+    else:
+        zs_UL = 0
+    
+    # this scales from the range of image values to the range of output grey levels
+    if (zs_UL - zs_LL) is not 0:
+        conv_01_99 = ( zg_UL - zg_LL ) / ( zs_UL - zs_LL )
+   
+    #we can expect some divide by zero errors, so suppress 
+    np.seterr(divide='ignore')
+    channel = np.log(samples)
+    channel = np.subtract(channel, zs_LL)
+    channel = np.multiply(channel, conv_01_99)
+    if invert:
+        channel = np.subtract(zg_UL, channel)
+    else:
+        channel = np.add(zg_LL, channel)
+    # ch = channel.astype('uint8')
+    image = Image.fromarray(channel).convert('L')
+    
+    return image
 
 def computeXYResolution(fileName):    
     '''compute the approximate across and alongtrack resolution so we can make a nearly isometric Image'''
