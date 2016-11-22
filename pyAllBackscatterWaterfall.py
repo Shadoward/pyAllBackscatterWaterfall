@@ -55,7 +55,7 @@ def main():
             while (bc < 300):
                 zoom *= 2
                 bc *= zoom 
-        createWaterfall(filename, 'gray', beamCount, zoom, args.clip, args.invert, args.annotate, xResolution, yResolution, args.rotate, leftExtent, rightExtent, distanceTravelled, navigation)
+        createWaterfall(filename, 'graylog', beamCount, zoom, args.clip, args.invert, args.annotate, xResolution, yResolution, args.rotate, leftExtent, rightExtent, distanceTravelled, navigation)
 
 def createWaterfall(filename, colorScale, beamCount, zoom=1.0, clip=0, invert=True, annotate=True, xResolution=1, yResolution=1, rotate=False, leftExtent=-100, rightExtent=100, distanceTravelled=0, navigation=[]):
     print ("Processing file: ", filename)
@@ -84,6 +84,7 @@ def createWaterfall(filename, colorScale, beamCount, zoom=1.0, clip=0, invert=Tr
             minBS = min(minBS, min(datagram.Reflectivity))
             maxBS = max(maxBS, max(datagram.Reflectivity))
 
+            print ("MinBS %.3f MaxBS %.3f" % (minBS, maxBS))
             waterfall.insert(0, np.asarray(datagram.Reflectivity))            
 
             # we need to stretch the data to make it isometric, so lets use numpy interp routing to do that for Us
@@ -112,16 +113,15 @@ def createWaterfall(filename, colorScale, beamCount, zoom=1.0, clip=0, invert=Tr
     # we now need to interpolate in the along track direction so we have apprximate isometry
     npGrid = np.array(waterfall)
 
-    stretchedGrid = np.empty((0, int(len(npGrid) * isoStretchFactor)))    
-    for column in npGrid.T:
-        y = np.linspace(0, len(column), len(column) * isoStretchFactor) #the required samples
-        yp = np.arange(len(column)) 
-        w2 = np.interp(y, yp, column, left=0.0, right=0.0)
-        # w2 = geodetic.medfilt(w2,7)
-        
-        stretchedGrid = np.append(stretchedGrid, [w2],axis=0)
-    npGrid = stretchedGrid
-    npGrid = np.ma.masked_values(npGrid, 0.0)
+    # stretchedGrid = np.empty((0, int(len(npGrid) * isoStretchFactor)))    
+    # for column in npGrid.T:
+    #     y = np.linspace(0, len(column), len(column) * isoStretchFactor) #the required samples
+    #     yp = np.arange(len(column)) 
+    #     w2 = np.interp(y, yp, column, left=0.0, right=0.0)
+    #     # w2 = geodetic.medfilt(w2,7)
+        # stretchedGrid = np.append(stretchedGrid, [w2],axis=0)
+    # npGrid = stretchedGrid
+    # npGrid = np.ma.masked_values(npGrid, 0.0)
     
     if colorScale.lower() == "graylog": 
         print ("Converting to Image with graylog scale...")
