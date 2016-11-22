@@ -113,14 +113,15 @@ def createWaterfall(filename, colorScale, beamCount, zoom=1.0, clip=0, invert=Tr
     # we now need to interpolate in the along track direction so we have apprximate isometry
     npGrid = np.array(waterfall)
 
-    # stretchedGrid = np.empty((0, int(len(npGrid) * isoStretchFactor)))    
-    # for column in npGrid.T:
-    #     y = np.linspace(0, len(column), len(column) * isoStretchFactor) #the required samples
-    #     yp = np.arange(len(column)) 
-    #     w2 = np.interp(y, yp, column, left=0.0, right=0.0)
-    #     # w2 = geodetic.medfilt(w2,7)
-        # stretchedGrid = np.append(stretchedGrid, [w2],axis=0)
-    # npGrid = stretchedGrid
+    stretchedGrid = np.empty((0, int(len(npGrid) * isoStretchFactor)))    
+    for column in npGrid.T:
+        y = np.linspace(0, len(column), len(column) * isoStretchFactor) #the required samples
+        yp = np.arange(len(column)) 
+        w2 = np.interp(y, yp, column, left=0.0, right=0.0)
+        # w2 = geodetic.medfilt(w2,7)
+        
+        stretchedGrid = np.append(stretchedGrid, [w2],axis=0)
+    npGrid = stretchedGrid
     # npGrid = np.ma.masked_values(npGrid, 0.0)
     
     if colorScale.lower() == "graylog": 
