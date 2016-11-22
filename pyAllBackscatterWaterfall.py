@@ -2,6 +2,7 @@ import sys
 sys.path.append("C:/development/Python/pyall")
 
 import argparse
+import bisect
 import csv
 from datetime import datetime
 import geodetic
@@ -25,14 +26,13 @@ def main():
     parser.add_argument('-z', dest='zoom', default = 0, action='store', help='-z <value> : Zoom scale factor. A larger number makes a larger image, and a smaller number (0.5) provides a smaller image, e.g -z 2 makes an image twice the native resolution. [Default: 0]')
     parser.add_argument('-a', action='store_true', default=False, dest='annotate', help='-a : Annotate the image with timestamps.  [Default: True]')
     parser.add_argument('-r', action='store_true', default=False, dest='rotate', help='-r : Rotate the resulting waterfall so the image reads from left to right instead of bottom to top.  [Default is bottom to top]')
-    parser.add_argument('-gray', action='store_true', default=False, dest='gray', help='-gray : Apply a gray scale depth palette to the image instead of a color depth.  [Default is False]')
+    parser.add_argument('-clip', dest='clip', default = 5, action='store', help='-clip <value> : Clip the minimum and maximum edges of the data by this percentage so the color stretch better represents the data.  [Default - 5.  A good value is -clip 5.]')
+    parser.add_argument('-invert', dest='invert', default = False, action='store_true', help='-invert : Inverts the color palette')
 
     if len(sys.argv)==1:
         parser.print_help()
         sys.exit(1)
     
-    #load a nice color palette
-    # colors = loadPalette(os.path.dirname(os.path.realpath(__file__)) + '/jeca.pal')
     args = parser.parse_args()
 
     print ("processing with settings: ", args)
@@ -55,9 +55,9 @@ def main():
             while (bc < 300):
                 zoom *= 2
                 bc *= zoom 
-        createWaterfall(filename, 'gray', beamCount, zoom, True, args.annotate, xResolution, yResolution, args.rotate, leftExtent, rightExtent, distanceTravelled, navigation)
+        createWaterfall(filename, 'gray', beamCount, zoom, args.clip, args.invert, args.annotate, xResolution, yResolution, args.rotate, leftExtent, rightExtent, distanceTravelled, navigation)
 
-def createWaterfall(filename, colorScale, beamCount, zoom=1.0, invert=True, annotate=True, xResolution=1, yResolution=1, rotate=False, leftExtent=-100, rightExtent=100, distanceTravelled=0, navigation=[]):
+def createWaterfall(filename, colorScale, beamCount, zoom=1.0, clip=0, invert=True, annotate=True, xResolution=1, yResolution=1, rotate=False, leftExtent=-100, rightExtent=100, distanceTravelled=0, navigation=[]):
     print ("Processing file: ", filename)
 
     r = pyall.ALLReader(filename)
@@ -89,15 +89,15 @@ def createWaterfall(filename, colorScale, beamCount, zoom=1.0, invert=True, anno
             # we need to stretch the data to make it isometric, so lets use numpy interp routing to do that for Us
             # datagram.AcrossTrackDistance.reverse()
             xp = np.array(datagram.AcrossTrackDistance) #the x distance for the beams of a ping.  we could possibly use the real values here instead todo
-            # datagram.Depth.reverse()
-            fp = np.array(datagram.Depth) #the depth list as a numpy array
+            # datagram.Backscatter.reverse()
+            fp = np.array(datagram.Reflectivity) #the Backscatter list as a numpy array
             # fp = geodetic.medfilt(fp,31)
             x = np.linspace(leftExtent, rightExtent, outputResolution) #the required samples needs to be about the same as the original number of samples, spread across the across track range
-            # newDepths = np.interp(x, xp, fp, left=0.0, right=0.0)
+            # newBackscatters = np.interp(x, xp, fp, left=0.0, right=0.0)
 
             # run a median filter to remove crazy noise
-            # newDepths = geodetic.medfilt(newDepths,7)
-            # waterfall.insert(0, np.asarray(newDepths))            
+            # newBackscatters = geodetic.medfilt(newBackscatters,7)
+            # waterfall.insert(0, np.asarray(newBackscatters))            
 
         recCount += 1
         if r.currentRecordDateTime().timestamp() % 30 == 0:
@@ -133,16 +133,63 @@ def createWaterfall(filename, colorScale, beamCount, zoom=1.0, invert=True, anno
     if annotate:
         #rotate the image if the user requests this.  It is a little better for viewing in a browser
         annotateWaterfall(img, navigation, isoStretchFactor)
-        meanDepth = np.average(waterfall)
+        meanBackscatter = np.average(waterfall)
         waterfallPixelSize = (abs(rightExtent) + abs(rightExtent)) /  img.width
-        # print ("Mean Depth %.2f" % meanDepth)
-        imgLegend = createLegend(filename, img.width, (abs(leftExtent)+abs(rightExtent)), distanceTravelled, waterfallPixelSize, minBS, maxBS, meanDepth, colorMap)
+        # print ("Mean Backscatter %.2f" % meanBackscatter)
+        imgLegend = createLegend(filename, img.width, (abs(leftExtent)+abs(rightExtent)), distanceTravelled, waterfallPixelSize, minBS, maxBS, meanBackscatter, colorMap)
         img = spliceImages(img, imgLegend)
 
     if rotate:
         img = img.rotate(-90, expand=True)
     img.save(os.path.splitext(filename)[0]+'.png')
     print ("Saved to: ", os.path.splitext(filename)[0]+'.png')
+
+##################################################################################################################
+def findMinMaxClipValues(channel, clip):
+    print ("Clipping data with an upper and lower percentage of:", clip)
+    # compute a histogram of teh data so we can auto clip the outliers
+    bins = np.arange(np.floor(channel.min()),np.ceil(channel.max()))
+    hist, base = np.histogram(channel, bins=bins, density=1)    
+
+    # instead of spreading across the entire data range, we can clip the outer n percent by using the cumsum.
+    # from the cumsum of histogram density, we can figure out what cut off sample amplitude removes n % of data
+    cumsum = np.cumsum(hist)   
+    
+    minimumBinIndex = bisect.bisect(cumsum,clip/100)
+    maximumBinIndex = bisect.bisect(cumsum,(1-clip/100))
+
+    # if DEBUG:
+    #     min = np.floor(channel.min())
+    #     max = np.ceil (channel.max())
+    #     # bins = np.arange(min, max, (max-min)/10)
+    #     # XBins = np.arange(10)
+    #     hist, bins = np.histogram(channel.flat, bins = 100)
+    #     width = 0.7 * (bins[1] - bins[0])
+    #     center = (bins[:-1] + bins[1:]) / 2
+    #     plt.bar(center, hist, align='center', width=width)
+    #     # plt.xlim(int(bin_edges.min()), int(bin_edges.max()))
+    #     plt.show()
+
+        # mu, sigma = 100, 15
+        # x = mu + sigma * np.random.randn(10000)
+        # hist, bins = np.histogram(x, bins=50)
+        # width = 0.7 * (bins[1] - bins[0])
+        # center = (bins[:-1] + bins[1:]) / 2
+        # plt.bar(center, hist, align='center', width=width)
+        # plt.show()
+
+        # width = 0.7 * (bins[1] - bins[0])
+        # center = (bins[:-1] + bins[1:]) / 2
+        # plt.bar(center, hist, align='center', width=width)
+        # plt.show()
+
+    return minimumBinIndex, maximumBinIndex
+
+###################################
+# zg_LL = lower limit of grey scale
+# zg_UL = upper limit of grey scale
+# zs_LL = lower limit of samples range
+# zs_UL = upper limit of sample range
 
 ###################################
 # zg_LL = lower limit of grey scale
@@ -276,7 +323,7 @@ def computeXYResolution(fileName):
                     leftExtents = np.append(leftExtents, min(datagram.AcrossTrackDistance))
                     rightExtents = np.append(rightExtents, max(datagram.AcrossTrackDistance))
                     recCount = recCount + 1
-                    beamCount = max(beamCount, len(datagram.Depth)) 
+                    beamCount = max(beamCount, len(datagram.Reflectivity)) 
             
     r.close()
     if recCount == 0:
@@ -319,38 +366,6 @@ def update_progress(job_title, progress):
     sys.stdout.write(msg)
     sys.stdout.flush()
 
-def loadPalette(paletteFileName):
-    '''this will load and return a .pal file so we can apply colors to depths.  It will strip off the headers from the file and return a list of n*RGB values'''
-    colors = []
-    with open(paletteFileName,'r') as f:
-        next(f) # skip headings
-        next(f) # skip headings
-        next(f) # skip headings
-        reader=csv.reader(f,delimiter='\t')
-        for red,green,blue in reader:
-            thiscolor = [float(red)/255.0, float(green) / 255.0, float(blue) / 255.0]
-            colors.append(thiscolor)
-    # now interpolate the colors so we have a broader spectrum
-    reds = [ seq[0] for seq in colors ]
-    x = np.linspace(1, len(reds), 256) #the desied samples needs to be about the same as the original number of samples
-    xp = np.linspace(1, len(reds), len(reds)) #the actual sample spacings
-    newReds = np.interp(x, xp, reds, left=0.0, right=0.0)
-    
-    greens = [ seq[1] for seq in colors ]
-    x = np.linspace(1, len(greens), 256) #the desied samples needs to be about the same as the original number of samples
-    xp = np.linspace(1, len(greens), len(greens)) #the actual sample spacings
-    newGreens = np.interp(x, xp, greens, left=0.0, right=0.0)
-    
-    blues = [ seq[2] for seq in colors ]
-    x = np.linspace(1, len(blues), 256) #the desied samples needs to be about the same as the original number of samples, spread across the across track range
-    xp = np.linspace(1, len(blues), len(blues)) #the actual sample spacings
-    newBlues = np.interp(x, xp, blues, left=0.0, right=0.0)
-
-    colors = []
-    for i in range(0,len(newReds)):
-        colors.append([newReds[i], newGreens[i], newBlues[i]])
-    return colors
-
 def loadNavigation(fileName):    
     '''loads all the navigation into lists'''
     navigation = []
@@ -379,14 +394,14 @@ def spliceImages(img1, img2):
         y_offset += im.size[1]
     return new_im
 
-def createLegend(fileName, imageWidth=640, waterfallWidth=640, waterfallLength=640, waterfallPixelSize=1, minDepth=0, maxDepth=999, meanDepth=99, colorMap=None):
+def createLegend(fileName, imageWidth=640, waterfallWidth=640, waterfallLength=640, waterfallPixelSize=1, minBackscatter=0, maxBackscatter=999, meanBackscatter=99, colorMap=None):
     '''make a legend specific for this waterfalls image'''
     # this legend will contain:
     # InputFileName: <filename>
     # Waterfall Width: xxx.xxm
     # Waterfall Length: xxx.xxxm
     # Waterfall Pixel Size: xx.xxm
-    # Mean Depth: xx.xxm
+    # Mean Backscatter: xx.xxm
     # Color Palette as a graphical representation
 
     x = 0
@@ -416,22 +431,22 @@ def createLegend(fileName, imageWidth=640, waterfallWidth=640, waterfallLength=6
     d.text( (x, y), label,  font=f, fill=white)
 
     y += fontHeight
-    label = "Minimum Depth      : %.2fm" % (minDepth)
+    label = "Minimum Backscatter      : %.2fm" % (minBackscatter)
     d.text( (x, y), label,  font=f, fill=white)
 
     y += fontHeight
-    label = "Maximum Depth      : %.2fm" % (maxDepth)
+    label = "Maximum Backscatter      : %.2fm" % (maxBackscatter)
     d.text( (x, y), label,  font=f, fill=white)
 
     y += fontHeight
-    label = "Mean Depth         : %.2fm" % (meanDepth)
+    label = "Mean Backscatter         : %.2fm" % (meanBackscatter)
     d.text( (x, y), label,  font=f, fill=white)
 
     if (colorMap==None):
         return img
     # Creates a list containing 5 lists, each of 8 items, all set to 0
     y += fontHeight
-    npline = np.linspace(start=minDepth, stop=maxDepth, num=imageWidth - ( fontHeight)) # length of colorbar is almost same as image
+    npline = np.linspace(start=minBackscatter, stop=maxBackscatter, num=imageWidth - ( fontHeight)) # length of colorbar is almost same as image
     npGrid = np.hstack((npGrid, npline))
     for i in range(fontHeight*2): # height of colorbar
         npGrid = np.vstack((npGrid, npline))
@@ -440,12 +455,12 @@ def createLegend(fileName, imageWidth=640, waterfallWidth=640, waterfallLength=6
     offset = x + int (fontHeight/2), y
     img.paste(colorImage,offset)
 
-    # now make the depth labels alongside the colorbar
+    # now make the Backscatter labels alongside the colorbar
     y += 2 + fontHeight * 2
-    labels = np.linspace(minDepth, maxDepth, 10)
+    labels = np.linspace(minBackscatter, maxBackscatter, 10)
     for l in labels:
         label= "%.2f" % (l)
-        x = (l-minDepth) * ((imageWidth - fontHeight) / (maxDepth-minDepth))
+        x = (l-minBackscatter) * ((imageWidth - fontHeight) / (maxBackscatter-minBackscatter))
         offset = int(x), int(y)
         txt=Image.new('RGB', (70,20))
         d = ImageDraw.Draw(txt)
