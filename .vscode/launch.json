@@ -13,7 +13,7 @@
                 "WaitOnNormalExit",
                 "RedirectOutput"
             ],
-            "args": ["-color", "gray", "-i", "C:/development/python/em302/3705_20160728_140113_Fugro_Equator_GA4421.all"\
+            "args": ["-color", "gray", "-i", "c:/projects/carisworldtour/preprocess/0010_20110308_194752.all"\
 
         }
    ]

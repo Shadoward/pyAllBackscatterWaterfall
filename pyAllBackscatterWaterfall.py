@@ -16,19 +16,20 @@ import pyall
 import time
 import os.path
 import warnings
+import statistics
 
 # ignore numpy NaN warnings when applying a mask to the images.
 warnings.filterwarnings('ignore')
 
 def main():
     parser = argparse.ArgumentParser(description='Read Kongsberg ALL file and create a hill shaded color waterfall image.')
-    parser.add_argument('-i', dest='inputFile', action='store', help='-i <ALLfilename> : input ALL filename to image. It can also be a wildcard, e.g. *.all')
-    parser.add_argument('-z', dest='zoom', default = 0, action='store', help='-z <value> : Zoom scale factor. A larger number makes a larger image, and a smaller number (0.5) provides a smaller image, e.g -z 2 makes an image twice the native resolution. [Default: 0]')
-    parser.add_argument('-a', action='store_true', default=False, dest='annotate', help='-a : Annotate the image with timestamps.  [Default: True]')
-    parser.add_argument('-r', action='store_true', default=False, dest='rotate', help='-r : Rotate the resulting waterfall so the image reads from left to right instead of bottom to top.  [Default is bottom to top]')
-    parser.add_argument('-clip', dest='clip', default = 5, action='store', help='-clip <value> : Clip the minimum and maximum edges of the data by this percentage so the color stretch better represents the data.  [Default - 5.  A good value is -clip 5.]')
-    parser.add_argument('-invert', dest='invert', default = False, action='store_true', help='-invert : Inverts the color palette')
-    parser.add_argument('-color', dest='color', default = 'graylog', action='store', help='-color <paletteName> : Specify the color palette.  Options are : -color yellow_brown_log, -color gray, -color yellow_brown or any of the palette filenames in the script folder. [Default = graylog for a grayscale logarithmic palette.]' )
+    parser.add_argument('-i', dest='inputFile', action='store', help='Input ALL filename to image. It can also be a wildcard, e.g. *.all')
+    parser.add_argument('-z', dest='zoom', default = 0, action='store', help='Zoom scale factor. A larger number makes a larger image, and a smaller number (0.5) provides a smaller image, e.g -z 2 makes an image twice the native resolution. [Default: 0]')
+    parser.add_argument('-a', action='store_true', default=False, dest='annotate', help='Annotate the image with timestamps.  [Default: True]')
+    parser.add_argument('-r', action='store_true', default=False, dest='rotate', help='Rotate the resulting waterfall so the image reads from left to right instead of bottom to top.  [Default is bottom to top]')
+    parser.add_argument('-clip', dest='clip', default = 5, action='store', help='Clip the minimum and maximum edges of the data by this percentage so the color stretch better represents the data.  [Default - 5.  A good value is -clip 5.]')
+    parser.add_argument('-invert', dest='invert', default = False, action='store_true', help='Inverts the color palette')
+    parser.add_argument('-color', dest='color', default = 'graylog', action='store', help='Specify the color palette.  Options are : -color yellow_brown_log, -color gray, -color yellow_brown or any of the palette filenames in the script folder. [Default = graylog for a grayscale logarithmic palette.]' )
 
     if len(sys.argv)==1:
         parser.print_help()
@@ -66,6 +67,7 @@ def createWaterfall(filename, colorScale, beamCount, zoom=1.0, clip=0, invert=Tr
     start_time = time.time() # time the process
     recCount = 0
     waterfall = []
+    currentBathyDatagram = None
     minBS = 9999.0
     maxBS = -minBS
     outputResolution = beamCount * zoom
@@ -73,26 +75,36 @@ def createWaterfall(filename, colorScale, beamCount, zoom=1.0, clip=0, invert=Tr
     print ("xRes %.2f yRes %.2f isoStretchFactor %.2f" % (xResolution, yResolution, isoStretchFactor))
     while r.moreData():
         TypeOfDatagram, datagram = r.readDatagram()
-        if (TypeOfDatagram == 0):
-            continue
+        # if (TypeOfDatagram == 0):
+        #     continue
         if (TypeOfDatagram == 'X') or (TypeOfDatagram == 'D'):
             datagram.read()
-            
-            if datagram.NBeams == 0:
+            currentBathyDatagram = datagram
+
+        if (TypeOfDatagram == 'Y'):
+            datagram.read()
+            if currentBathyDatagram is None:
                 continue
 
+            if currentBathyDatagram.NBeams == 0:
+                continue
+
+            for i,b in enumerate(datagram.beams):
+                # currentBathyDatagram.Reflectivity[i] = statistics.mean(b.samples)
+                currentBathyDatagram.Reflectivity[i] = max(b.samples)
+            
             # we need to remember the actual data extents so we can set the color palette mappings to the same limits. 
-            minBS = min(minBS, min(datagram.Reflectivity))
-            maxBS = max(maxBS, max(datagram.Reflectivity))
+            minBS = min(minBS, min(currentBathyDatagram.Reflectivity))
+            maxBS = max(maxBS, max(currentBathyDatagram.Reflectivity))
 
             # print ("MinBS %.3f MaxBS %.3f" % (minBS, maxBS))
             # waterfall.insert(0, np.abs( np.asarray(datagram.Reflectivity)))            
 
             # we need to stretch the data to make it isometric, so lets use numpy interp routing to do that for Us
             # datagram.AcrossTrackDistance.reverse()
-            xp = np.array(datagram.AcrossTrackDistance) #the x distance for the beams of a ping.  we could possibly use the real values here instead todo
+            xp = np.array(currentBathyDatagram.AcrossTrackDistance) #the x distance for the beams of a ping.  we could possibly use the real values here instead todo
             # datagram.Backscatter.reverse()
-            fp = np.abs(np.array(datagram.Reflectivity)) #the Backscatter list as a numpy array
+            fp = np.abs(np.array(currentBathyDatagram.Reflectivity)) #the Backscatter list as a numpy array
             # fp = geodetic.medfilt(fp,31)
             x = np.linspace(leftExtent, rightExtent, outputResolution) #the required samples needs to be about the same as the original number of samples, spread across the across track range
             newBackscatters = np.interp(x, xp, fp, left=0.0, right=0.0)
@@ -213,7 +225,9 @@ def samplesToGrayImage(samples, invert, clip):
         zs_LL, zs_UL = findMinMaxClipValues(channel, clip)
     else:
         zs_LL = channel.min()
+        zs_LL = zs_LL - ((channel.max() - channel.min())/20)
         zs_UL = channel.max()
+        zs_UL = zs_UL + ((channel.max() - channel.min())/20)
     
     # this scales from the range of image values to the range of output grey levels
     if (zs_UL - zs_LL) is not 0:
