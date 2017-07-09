@@ -225,10 +225,11 @@ def samplesToGrayImage(samples, invert, clip):
         zs_LL, zs_UL = findMinMaxClipValues(channel, clip)
     else:
         zs_LL = channel.min()
-        zs_LL = zs_LL - ((channel.max() - channel.min())/20)
         zs_UL = channel.max()
-        zs_UL = zs_UL + ((channel.max() - channel.min())/20)
-    
+    if clip < 0: #lose some contrast by expanding the data range
+        zs_LL = zs_LL - ((channel.max() - channel.min())/(100/abs(clip)))
+        zs_UL = zs_UL + ((channel.max() - channel.min())/(100/abs(clip)))
+
     # this scales from the range of image values to the range of output grey levels
     if (zs_UL - zs_LL) is not 0:
         conv_01_99 = ( zg_UL - zg_LL ) / ( zs_UL - zs_LL )
