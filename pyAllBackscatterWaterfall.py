@@ -92,6 +92,7 @@ def createWaterfall(filename, colorScale, beamCount, zoom=1.0, clip=0, invert=Tr
             for i,b in enumerate(datagram.beams):
                 # currentBathyDatagram.Reflectivity[i] = statistics.mean(b.samples)
                 currentBathyDatagram.Reflectivity[i] = max(b.samples)
+                # currentBathyDatagram.Reflectivity[i] = b.samples[b.centreSampleNumber-1]
             
             # we need to remember the actual data extents so we can set the color palette mappings to the same limits. 
             minBS = min(minBS, min(currentBathyDatagram.Reflectivity))
