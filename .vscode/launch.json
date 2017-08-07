@@ -14,7 +14,6 @@
                 "RedirectOutput"
             ],
             "args": ["-color", "gray", "-i", "c:/projects/carisworldtour/preprocess/0010_20110308_194752.all"\
-
         }
    ]
 }
